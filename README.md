@@ -40,8 +40,8 @@ com.example.moneyload
 
 Unused packages are documented here rather than populated with placeholder classes.
 The domain now contains immutable money, load attempt, decision and policy values,
-plus UTC daily and Monday-based weekly bucket calculations. No decision algorithm
-or persistence implementation is present.
+plus UTC daily and Monday-based weekly bucket calculations. JDBC persistence adapters
+implement application ports; no service decision algorithm is present.
 
 Global limits are configured under `velocity.limits` in `application.yml`:
 `daily-amount: "5000.00"`, `weekly-amount: "20000.00"`, and `daily-count: 3`.
@@ -74,16 +74,64 @@ columns are required. Timestamps use `TIMESTAMP(9) WITH TIME ZONE` for absolute
 application times; bucket keys use `DATE` and are derived by the application.
 
 Identifiers are strings stored as `VARCHAR(255)`. This is a conservative storage
-assumption: the current domain has no maximum identifier length. Validation of
-this boundary must be addressed when persistence is introduced. Primary keys
+assumption: the current domain has no maximum identifier length. The database
+rejects longer identifiers with a technical integrity exception; domain behavior
+is unchanged. Input-boundary validation remains for a later chunk. Primary keys
 provide the only indexes; date-only retention indexes are deferred until retention
 access patterns are implemented. No foreign keys or triggers are needed.
 
-Repository ports are deferred to Chunk 4 to avoid inventing reservation and atomic
-increment semantics now. This chunk adds no persistence implementation or velocity
-logic. H2 is the only required database; PostgreSQL is neither configured nor
-required. H2 remains ephemeral despite storing committed results during its lifetime.
+Chunk 3 introduced only the schema; Chunk 4 adds the ports and adapters below.
+H2 is the only required database; PostgreSQL is neither configured nor required. H2 remains ephemeral despite storing committed results during its lifetime.
 
 The existing application smoke test shares one Spring context with schema checks
 for composite keys, cross-customer load IDs, all business decisions, decision
 consistency, required decision fields, and non-negative aggregate counters.
+
+## JDBC persistence (Chunk 4)
+
+`LoadResultRepository` inserts a completed decision and retrieves the original
+attempt, decision, and creation timestamp by `(customer_id, load_id)`.
+`JdbcLoadResultRepository` uses a plain INSERT guarded by the composite primary
+key. There is no pending row or provisional business decision. Accepted and declined results are both recoverable.
+
+The final INSERT is the uniqueness arbitration operation. An initial lookup is
+only a duplicate check, never a reservation. A competing insert raises Spring's
+`DuplicateKeyException`. The future service MUST roll back the entire attempt,
+including any bucket increments, before reading the winning committed result in
+a new transaction. It must not catch the duplicate and commit prior increments.
+This permits recovery after an ambiguous outcome without overwriting the original
+result. Reservation, retry, and cross-repository orchestration are not implemented.
+
+`VelocityRepository` ensures daily/weekly buckets, attempts conditional increments,
+and reads immutable bucket snapshots. `JdbcVelocityRepository` inserts zeroed
+buckets and handles only `DuplicateKeyException` for existing buckets. This is an
+H2 choice: duplicate statements leave the caller transaction usable. It preserves
+existing counters and timestamps; a future PostgreSQL adapter needs different
+bucket-creation SQL because PostgreSQL aborts a transaction on a duplicate error.
+
+Each increment is a single conditional UPDATE. Amount predicates compare the
+stored amount with `limit - requestedAmount` to avoid overflowing BIGINT addition;
+the daily count predicate uses `count < limit`. Money and policy domain types
+ensure non-negative requests and positive limits. One affected row means success;
+zero means no matching row satisfied the limits. Callers must ensure the bucket
+exists first. Technical failures propagate rather than becoming limit rejections.
+
+Bucket reads are snapshots, not a SELECT-before-UPDATE authorization. After a
+failed daily update, a read can support deterministic decline-reason precedence,
+but intervening commits may change the state. It cannot prove which predicate
+failed at update time; final reason precedence/isolation belongs to the later
+service design. No explicit locks are taken.
+
+Callers supply UTC bucket dates and processing `Instant` values. JDBC binds times
+as UTC `OffsetDateTime` and maps them back to `Instant`, preserving nanoseconds on
+H2. Repositories create no transaction boundaries and participate in caller-owned
+transactions. H2 tests cover persisted decisions, duplicate keys, bucket creation,
+exact limits, rejected updates, overflow, key isolation, technical failures, and
+low-level rollback participation. No concurrent tests or service workflow exist.
+
+Migration `V1__create_velocity_schema.sql` uses a CASE expression for the
+allowed-reason check. Repository tests using
+fresh JDBC connections exposed H2 2.4.240 retaining a closed DDL session in the IN
+constraint ([H2 issue #4291](https://github.com/h2database/h2database/issues/4291)).
+The CASE form preserves the same business values after the migration connection
+closes; existing schema tests still verify invalid reasons are rejected.
