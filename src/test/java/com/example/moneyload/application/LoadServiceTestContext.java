@@ -4,6 +4,8 @@ import com.example.moneyload.application.port.LoadResultRepository;
 import com.example.moneyload.application.port.VelocityRepository;
 import com.example.moneyload.domain.VelocityPolicy;
 import java.time.Clock;
+import com.example.moneyload.observability.LoadDecisionLoggingAspect;
+import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
@@ -23,11 +25,12 @@ final class LoadServiceTestContext {
         context.registerBean(VelocityPolicy.class, () -> policy);
         context.registerBean(Clock.class, () -> clock);
         context.registerBean(PlatformTransactionManager.class, () -> manager);
-        context.register(LoadFundsTransaction.class, LoadFundsService.class);
+        context.register(LoadFundsTransaction.class, LoadFundsService.class, LoadDecisionLoggingAspect.class);
         context.refresh();
         return context;
     }
 
+    @EnableAspectJAutoProxy(proxyTargetClass = true)
     @EnableTransactionManagement(proxyTargetClass = true)
     static class TransactionConfiguration {
     }

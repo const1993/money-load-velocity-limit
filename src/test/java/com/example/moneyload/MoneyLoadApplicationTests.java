@@ -1,6 +1,8 @@
 package com.example.moneyload;
 
 import com.example.moneyload.domain.DecisionReason;
+import com.example.moneyload.application.LoadFundsService;
+import org.springframework.aop.support.AopUtils;
 import com.example.moneyload.domain.VelocityPolicy;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -36,6 +38,7 @@ class MoneyLoadApplicationTests {
     @Test
     void contextLoads() {
         assertThat(context.isActive()).isTrue();
+        assertThat(AopUtils.isAopProxy(context.getBean(LoadFundsService.class))).isTrue();
         assertThat(context.getBean(VelocityPolicy.class)).isEqualTo(new VelocityPolicy(500000, 2000000, 3));
         assertThat(jdbc.sql("SELECT 1").query(Integer.class).single()).isEqualTo(1);
         var migrations = context.getBean(Flyway.class).info();
