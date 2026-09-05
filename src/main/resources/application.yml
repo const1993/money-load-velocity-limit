@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: money-load-velocity-limit
+  datasource:
+    url: jdbc:h2:mem:moneyload;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+  flyway:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
