@@ -15,8 +15,7 @@ curl http://localhost:8080/actuator/health
 ```
 
 H2 runs in memory and data is discarded when the application exits. Flyway is
-enabled with its default `classpath:db/migration` location. No migrations or
-business tables are defined yet; Flyway initializes its schema history on startup.
+enabled with its default `classpath:db/migration` location. Migration `V1__create_velocity_schema.sql` creates the business schema on startup.
 Only the health actuator endpoint is exposed. No external infrastructure is needed.
 
 ## Package boundaries
@@ -60,3 +59,31 @@ Boot 4.1's Spring test extension requires JUnit 6. It also checks JDBC connectiv
 and Flyway initialization, and verifies the configured default policy. Focused
 JUnit tests cover domain invariants, exact money parsing, UTC/DST boundaries, and
 configuration binding and startup validation using a small Spring context.
+
+## Database foundation (Chunk 3)
+
+Flyway owns three tables: `load_attempt` stores completed accepted/declined decisions
+keyed by `(customer_id, load_id)`; `daily_velocity` and `weekly_velocity` hold only
+accepted aggregate state keyed by customer and UTC date / Monday week start.
+Future enforcement will use these buckets, not history SUM/COUNT queries.
+
+Money columns use `BIGINT` cents and the daily count uses `INTEGER`, all with
+non-negative checks. Decisions use the Java enum names in a constrained
+`VARCHAR(32)`, with a check keeping `accepted` consistent with the reason. All
+columns are required. Timestamps use `TIMESTAMP(9) WITH TIME ZONE` for absolute
+application times; bucket keys use `DATE` and are derived by the application.
+
+Identifiers are strings stored as `VARCHAR(255)`. This is a conservative storage
+assumption: the current domain has no maximum identifier length. Validation of
+this boundary must be addressed when persistence is introduced. Primary keys
+provide the only indexes; date-only retention indexes are deferred until retention
+access patterns are implemented. No foreign keys or triggers are needed.
+
+Repository ports are deferred to Chunk 4 to avoid inventing reservation and atomic
+increment semantics now. This chunk adds no persistence implementation or velocity
+logic. H2 is the only required database; PostgreSQL is neither configured nor
+required. H2 remains ephemeral despite storing committed results during its lifetime.
+
+The existing application smoke test shares one Spring context with schema checks
+for composite keys, cross-customer load IDs, all business decisions, decision
+consistency, required decision fields, and non-negative aggregate counters.
