@@ -39,9 +39,24 @@ com.example.moneyload
 └── MoneyLoadApplication
 ```
 
-Packages are documented here rather than populated with placeholder classes.
-This bootstrap contains no money-load business logic.
+Unused packages are documented here rather than populated with placeholder classes.
+The domain now contains immutable money, load attempt, decision and policy values,
+plus UTC daily and Monday-based weekly bucket calculations. No decision algorithm
+or persistence implementation is present.
+
+Global limits are configured under `velocity.limits` in `application.yml`:
+`daily-amount: "5000.00"`, `weekly-amount: "20000.00"`, and `daily-count: 3`.
+Amounts bind as `BigDecimal` and convert exactly once at startup into an immutable
+policy containing long cents. Missing, non-positive, fractional-cent, overflowing,
+or inconsistent limits fail startup; the weekly amount must be at least the daily amount.
+
+Load amount strings require `$` followed by unsigned decimal digits, optionally
+with a decimal point and more digits. Whitespace, signs, grouping separators, and
+scientific notation are rejected. Zero and trailing fractional zeros are allowed
+when the amount represents whole cents. Values are never rounded.
 
 The smoke test uses JUnit 5 and starts/closes Spring Boot directly because Spring
 Boot 4.1's Spring test extension requires JUnit 6. It also checks JDBC connectivity
-and Flyway initialization.
+and Flyway initialization, and verifies the configured default policy. Focused
+JUnit tests cover domain invariants, exact money parsing, UTC/DST boundaries, and
+configuration binding and startup validation using a small Spring context.

@@ -8,6 +8,12 @@ spring:
   flyway:
     enabled: true
 
+velocity:
+  limits:
+    daily-amount: "5000.00"
+    weekly-amount: "20000.00"
+    daily-count: 3
+
 management:
   endpoints:
     web:
