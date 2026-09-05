@@ -15,6 +15,8 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -44,6 +46,7 @@ class LoadFundsServiceTests {
     private TransactionStatus status;
     private Object savepoint;
     private LoadFundsService service;
+    private AnnotationConfigApplicationContext context;
 
     @BeforeEach
     void setUp() {
@@ -54,7 +57,13 @@ class LoadFundsServiceTests {
         savepoint = new Object();
         when(manager.getTransaction(any())).thenReturn(status);
         when(status.createSavepoint()).thenReturn(savepoint);
-        service = new LoadFundsService(loads, velocity, POLICY, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+        context = LoadServiceTestContext.create(loads, velocity, POLICY, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+        service = context.getBean(LoadFundsService.class);
+    }
+
+    @AfterEach
+    void closeContext() {
+        context.close();
     }
 
     @Test

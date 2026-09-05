@@ -17,6 +17,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +45,7 @@ class LoadFundsServiceIntegrationTests {
     private static final VelocityPolicy POLICY = new VelocityPolicy(500_000, 2_000_000, 3);
     private static final LoadAttempt ATTEMPT = new LoadAttempt("load", "customer", new Money(100_000), BEFORE);
 
+    private final List<AnnotationConfigApplicationContext> contexts = new ArrayList<>();
     private EmbeddedDatabase database;
     private LoadResultRepository loads;
     private VelocityRepository velocity;
@@ -59,6 +63,7 @@ class LoadFundsServiceIntegrationTests {
 
     @AfterEach
     void closeDatabase() {
+        contexts.forEach(AnnotationConfigApplicationContext::close);
         if (database != null) {
             database.shutdown();
         }
@@ -165,8 +170,10 @@ class LoadFundsServiceIntegrationTests {
     }
 
     private LoadFundsService serviceUsing(LoadResultRepository repository) {
-        return new LoadFundsService(repository, velocity, POLICY, Clock.fixed(NOW, ZoneOffset.UTC),
+        var context = LoadServiceTestContext.create(repository, velocity, POLICY, Clock.fixed(NOW, ZoneOffset.UTC),
                 new DataSourceTransactionManager(database));
+        contexts.add(context);
+        return context.getBean(LoadFundsService.class);
     }
 
     private void seedBuckets(long dailyAmount, int count, long weeklyAmount) {
