@@ -19,6 +19,12 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.ArrayList;
 import java.util.List;
+import java.sql.SQLRecoverableException;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterEach;
@@ -170,8 +176,83 @@ class LoadFundsServiceIntegrationTests {
     }
 
     private LoadFundsService serviceUsing(LoadResultRepository repository) {
+        return serviceUsing(repository, new DataSourceTransactionManager(database));
+    }
+
+    @Test
+    void failedCallRollsBackAndExplicitResubmissionUsesFreshTransaction() {
+        var repository = spy(loads);
+        var resources = new ArrayList<Object>();
+        doAnswer(invocation -> {
+            resources.add(TransactionSynchronizationManager.getResource(database));
+            // At the start of either attempt, the failed insert and increments must be absent.
+            assertThat(loads.findResult("customer", "load")).isEmpty();
+            assertThat(velocity.findDailyBucket("customer", DAY)).isEmpty();
+            assertThat(velocity.findWeeklyBucket("customer", WEEK)).isEmpty();
+            return invocation.callRealMethod();
+        }).when(repository).findResult("customer", "load");
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+            throw new TransientDataAccessResourceException("Failure after insert");
+        }).doCallRealMethod().when(repository).insertDecision(any(), any(), any());
+        var processor = serviceUsing(repository);
+        var outer = new TransactionTemplate(new DataSourceTransactionManager(database));
+        outer.executeWithoutResult(status -> {
+            Object outerResource = TransactionSynchronizationManager.getResource(database);
+            assertThatThrownBy(() -> processor.process(ATTEMPT))
+                    .isInstanceOf(TransientDataAccessResourceException.class);
+            assertThat(resources).hasSize(1);
+            assertThat(TransactionSynchronizationManager.getResource(database)).isSameAs(outerResource);
+            assertDecision(processor.process(ATTEMPT), DecisionReason.ACCEPTED);
+            assertThat(resources).hasSize(2);
+            assertThat(resources.get(0)).isNotSameAs(resources.get(1)).isNotSameAs(outerResource);
+            assertThat(resources.get(1)).isNotSameAs(outerResource);
+            status.setRollbackOnly();
+        });
+        assertThat(velocity.findDailyBucket("customer", DAY)).contains(new DailyBucket(100_000, 1, NOW));
+        assertThat(velocity.findWeeklyBucket("customer", WEEK)).contains(new WeeklyBucket(100_000, NOW));
+        assertStoredDecision(DecisionReason.ACCEPTED);
+        verify(repository, times(2)).insertDecision(any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"100000,ACCEPTED", "600000,DAILY_AMOUNT_LIMIT_EXCEEDED"})
+    void uncertainCommitFailsImmediatelyAndExplicitResubmissionRecoversStoredDecision(long cents, DecisionReason reason) {
+        var repository = spy(loads);
+        var manager = new DataSourceTransactionManager(database) {
+            private boolean firstCommit = true;
+
+            @Override
+            protected void doCommit(DefaultTransactionStatus status) {
+                super.doCommit(status);
+                if (firstCommit) {
+                    firstCommit = false;
+                    throw new TransactionSystemException("Commit acknowledgement lost", new SQLRecoverableException());
+                }
+            }
+        };
+        var processor = serviceUsing(repository, manager);
+        var load = new LoadAttempt("load", "customer", new Money(cents), BEFORE);
+        assertThatThrownBy(() -> processor.process(load)).isInstanceOf(TransactionSystemException.class);
+        verify(repository, times(1)).findResult("customer", "load");
+        var recovered = (LoadOutcome.Duplicate) processor.process(load);
+        assertThat(recovered.originalResult().decision().reason()).isEqualTo(reason);
+        verify(repository, times(2)).findResult("customer", "load");
+        verify(repository, times(1)).insertDecision(any(), any(), any());
+        if (reason == DecisionReason.ACCEPTED) {
+            assertThat(velocity.findDailyBucket("customer", DAY)).contains(new DailyBucket(cents, 1, NOW));
+            assertThat(velocity.findWeeklyBucket("customer", WEEK)).contains(new WeeklyBucket(cents, NOW));
+        } else {
+            assertThat(velocity.findDailyBucket("customer", DAY)).isEmpty();
+            assertThat(velocity.findWeeklyBucket("customer", WEEK)).isEmpty();
+        }
+        // A separate input call still exposes a genuine duplicate to future adapters.
+        assertThat(processor.process(load)).isInstanceOf(LoadOutcome.Duplicate.class);
+    }
+
+    private LoadFundsService serviceUsing(LoadResultRepository repository, DataSourceTransactionManager manager) {
         var context = LoadServiceTestContext.create(repository, velocity, POLICY, Clock.fixed(NOW, ZoneOffset.UTC),
-                new DataSourceTransactionManager(database));
+                manager);
         contexts.add(context);
         return context.getBean(LoadFundsService.class);
     }
