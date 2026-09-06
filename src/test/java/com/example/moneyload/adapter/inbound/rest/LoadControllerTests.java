@@ -40,7 +40,7 @@ class LoadControllerTests {
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new LoadController(service))
+        mvc = MockMvcBuilders.standaloneSetup(new LoadController(service, org.mapstruct.factory.Mappers.getMapper(LoadResponseMapper.class)))
                 .setControllerAdvice(new LoadExceptionHandler(new TechnicalFailureClassifier()))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter(json))
                 .addFilters(new RequestIdFilter()).build();

@@ -1,23 +1,27 @@
 package com.example.moneyload.adapter.inbound.rest;
 
-import com.example.moneyload.adapter.inbound.file.InvalidFileInputException;
 import com.example.moneyload.adapter.inbound.file.FileLoadProcessingException;
+import com.example.moneyload.adapter.inbound.file.InvalidFileInputException;
 import com.example.moneyload.adapter.inbound.file.LoadFileProcessor;
-import com.example.moneyload.adapter.inbound.file.SequentialLoadFileProcessor;
 import com.example.moneyload.adapter.inbound.file.ParallelLoadFileProcessor;
+import com.example.moneyload.adapter.inbound.file.SequentialLoadFileProcessor;
+import com.example.moneyload.configuration.FileProcessingProperties;
 import jakarta.servlet.http.HttpServletResponse;
+
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import org.springframework.http.HttpHeaders;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.TransientDataAccessResourceException;
-import java.util.concurrent.Semaphore;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.concurrent.Semaphore;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -35,15 +39,23 @@ public class LoadFileController {
         this(sequential, parallel, 2, Duration.ofMinutes(5));
     }
 
+    public LoadFileController(
+            SequentialLoadFileProcessor sequential,
+            ParallelLoadFileProcessor parallel,
+            int maxUploads,
+            Duration timeout
+    ) {
+        this(sequential, parallel, new FileProcessingProperties(4, 256, maxUploads, timeout));
+    }
+
     @Autowired
-    public LoadFileController(SequentialLoadFileProcessor sequential, ParallelLoadFileProcessor parallel,
-                              @Value("${processing.file.max-concurrent-uploads:2}") int maxUploads,
-                              @Value("${processing.file.timeout:5m}") Duration timeout) {
-        if (maxUploads < 1 || timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("Upload concurrency and timeout must be positive");
-        }
-        this.uploads = new Semaphore(maxUploads);
-        this.timeout = timeout;
+    public LoadFileController(
+            SequentialLoadFileProcessor sequential,
+            ParallelLoadFileProcessor parallel,
+            FileProcessingProperties properties
+    ) {
+        this.uploads = new Semaphore(properties.maxConcurrentUploads());
+        this.timeout = properties.timeout();
         this.sequential = sequential;
         this.parallel = parallel;
     }
@@ -71,14 +83,15 @@ public class LoadFileController {
         }
         long started = System.nanoTime();
         String mode = processor == sequential ? "sequential" : "parallel";
-        java.nio.file.Path output = null;
+        Path output = null;
         log.atInfo().addKeyValue("event", "file_processing_started").addKeyValue("mode", mode)
                 .addKeyValue("input_bytes", file.getSize()).log("File processing started");
         try {
             output = Files.createTempFile("money-load-output-", ".jsonl");
             LoadFileProcessor.Counts counts;
             try (var reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8)) {
-                @Override public String readLine() throws java.io.IOException {
+                @Override
+                public String readLine() throws IOException {
                     if (System.nanoTime() - started >= timeout.toNanos()) {
                         throw new TransientDataAccessResourceException("File processing deadline exceeded");
                     }
@@ -102,13 +115,19 @@ public class LoadFileController {
         } catch (Exception failure) {
             var event = log.atInfo().addKeyValue("event", "file_processing_failed").addKeyValue("mode", mode)
                     .addKeyValue("duration_ms", (System.nanoTime() - started) / 1_000_000);
-            if (failure instanceof InvalidFileInputException invalid) event = event.addKeyValue("line_number", invalid.lineNumber());
-            if (failure instanceof FileLoadProcessingException technical) event = event.addKeyValue("line_number", technical.lineNumber());
+            if (failure instanceof InvalidFileInputException invalid) {
+                event = event.addKeyValue("line_number", invalid.lineNumber());
+            }
+            if (failure instanceof FileLoadProcessingException technical) {
+                event = event.addKeyValue("line_number", technical.lineNumber());
+            }
             event.log("File processing stopped");
             throw failure;
         } finally {
             try {
-                if (output != null) Files.deleteIfExists(output);
+                if (output != null) {
+                    Files.deleteIfExists(output);
+                }
             } finally {
                 uploads.release();
             }

@@ -8,7 +8,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import com.example.moneyload.configuration.FileProcessingProperties;
 import org.slf4j.MDC;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,17 +29,16 @@ public class ParallelLoadFileProcessor implements LoadFileProcessor {
         this(service, json, 4, 256);
     }
 
+    public ParallelLoadFileProcessor(LoadFundsService service, JsonMapper json, int workers, int windowSize) {
+        this(service, json, new FileProcessingProperties(workers, windowSize, 2, java.time.Duration.ofMinutes(5)));
+    }
+
     @Autowired
-    public ParallelLoadFileProcessor(LoadFundsService service, JsonMapper json,
-                             @Value("${processing.file.workers:4}") int workers,
-                             @Value("${processing.file.window-size:256}") int windowSize) {
-        if (workers < 1 || windowSize < workers) {
-            throw new IllegalArgumentException("File workers must be positive and window-size must be at least workers");
-        }
+    public ParallelLoadFileProcessor(LoadFundsService service, JsonMapper json, FileProcessingProperties properties) {
         this.service = service;
         this.codec = new FileLoadCodec(json);
-        this.workers = workers;
-        this.windowSize = windowSize;
+        this.workers = properties.workers();
+        this.windowSize = properties.windowSize();
     }
 
     /** Caller owns the streams. Customer order and global output order are preserved within this upload. */
