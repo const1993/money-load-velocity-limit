@@ -7,6 +7,7 @@
             <charset>UTF-8</charset>
         </encoder>
     </appender>
+    <logger name="com.example.moneyload.observability.LoadDecisionLoggingAspect" level="DEBUG"/>
     <root level="INFO">
         <appender-ref ref="STDERR"/>
     </root>

@@ -1,6 +1,7 @@
 package com.example.moneyload.adapter.inbound.rest;
 
-import com.example.moneyload.adapter.inbound.file.LoadFileProcessor;
+import com.example.moneyload.adapter.inbound.file.SequentialLoadFileProcessor;
+import com.example.moneyload.adapter.inbound.file.ParallelLoadFileProcessor;
 import com.example.moneyload.application.LoadFundsService;
 import com.example.moneyload.application.LoadOutcome;
 import com.example.moneyload.application.error.TechnicalFailureClassifier;
@@ -29,13 +30,13 @@ class LoadFileControllerTests {
     @BeforeEach
     void setUp() {
         var json = new RestJsonConfiguration().restJsonMapper();
-        mvc = MockMvcBuilders.standaloneSetup(new LoadFileController(new LoadFileProcessor(service, json)))
+        mvc = MockMvcBuilders.standaloneSetup(new LoadFileController(new SequentialLoadFileProcessor(service, json), new ParallelLoadFileProcessor(service, json)))
                 .setControllerAdvice(new LoadExceptionHandler(new TechnicalFailureClassifier()))
                 .setMessageConverters(new JacksonJsonHttpMessageConverter(json)).build();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/v1/loads/file", "/v1/loads/file/download"})
+    @ValueSource(strings = {"/v1/loads/file/sequential", "/v1/loads/file/parallel"})
     void uploadReturnsExactOrderedJsonLinesWithoutDuplicates(String endpoint) throws Exception {
         when(service.process(any())).thenAnswer(call -> {
             LoadAttempt attempt = call.getArgument(0);
@@ -51,13 +52,12 @@ class LoadFileControllerTests {
                 {"id":"1","customer_id":"c","accepted":true}
                 {"id":"2","customer_id":"c","accepted":false}
                 """);
-        assertThat(response.getHeader("Content-Disposition")).isEqualTo(endpoint.endsWith("download")
-                ? "attachment; filename=\"output.txt\"" : null);
+        assertThat(response.getHeader("Content-Disposition")).isNull();
         verify(service, times(3)).process(any());
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/v1/loads/file", "/v1/loads/file/download"})
+    @ValueSource(strings = {"/v1/loads/file/sequential", "/v1/loads/file/parallel"})
     void optionallyReplaysOriginalAcceptedAndDeclinedDuplicatesInOrder(String endpoint) throws Exception {
         when(service.process(any())).thenAnswer(call -> {
             LoadAttempt incoming = call.getArgument(0);
@@ -78,7 +78,7 @@ class LoadFileControllerTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/v1/loads/file", "/v1/loads/file/download"})
+    @ValueSource(strings = {"/v1/loads/file/sequential", "/v1/loads/file/parallel"})
     void explicitFalseSkipsDuplicates(String endpoint) throws Exception {
         when(service.process(any())).thenAnswer(call -> new LoadOutcome.Duplicate(new StoredLoadResult(
                 call.getArgument(0), new LoadDecision(DecisionReason.ACCEPTED), Instant.EPOCH)));
@@ -93,18 +93,18 @@ class LoadFileControllerTests {
     void invalidLineReturns400AndStopsBeforeLaterLines() throws Exception {
         when(service.process(any())).thenAnswer(call -> new LoadOutcome.Completed(new StoredLoadResult(
                 call.getArgument(0), new LoadDecision(DecisionReason.ACCEPTED), Instant.EPOCH)));
-        var response = mvc.perform(multipart("/v1/loads/file/download")
+        var response = mvc.perform(multipart("/v1/loads/file/parallel")
                 .file(file(line("1") + "invalid\n" + line("2")))).andReturn().getResponse();
         assertThat(response.getStatus()).isEqualTo(400);
         assertThat(response.getHeader("Content-Disposition")).isNull();
-        assertThat(response.getContentAsString()).contains("INVALID_REQUEST").doesNotContain("accepted");
+        assertThat(response.getContentAsString()).contains("INVALID_REQUEST", "line 2").doesNotContain("accepted");
         verify(service).process(any());
     }
 
     @Test
     void technicalFailureReturns503WithoutDecisionsOrRetry() throws Exception {
         when(service.process(any())).thenThrow(new TransientDataAccessResourceException("unavailable"));
-        var response = mvc.perform(multipart("/v1/loads/file").file(file(line("1") + line("2"))))
+        var response = mvc.perform(multipart("/v1/loads/file/sequential").file(file(line("1") + line("2"))))
                 .andReturn().getResponse();
         assertThat(response.getStatus()).isEqualTo(503);
         assertThat(response.getContentAsString()).contains("SERVICE_UNAVAILABLE").doesNotContain("accepted");
@@ -113,15 +113,66 @@ class LoadFileControllerTests {
 
     @Test
     void emptyUploadReturnsEmptyBody() throws Exception {
-        var response = mvc.perform(multipart("/v1/loads/file").file(file(""))).andReturn().getResponse();
+        var response = mvc.perform(multipart("/v1/loads/file/sequential").file(file(""))).andReturn().getResponse();
         assertThat(response.getStatus()).isEqualTo(200);
         assertThat(response.getContentAsString()).isEmpty();
         verifyNoInteractions(service);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"/v1/loads/file/sequential", "/v1/loads/file/parallel"})
+    void downloadOptionReturnsAttachment(String endpoint) throws Exception {
+        var response = mvc.perform(multipart(endpoint).param("download", "true").file(file("")))
+                .andReturn().getResponse();
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getHeader("Content-Disposition")).isEqualTo("attachment; filename=\"output.txt\"");
+    }
+
     @Test
     void missingFileReturns400() throws Exception {
-        assertThat(mvc.perform(multipart("/v1/loads/file")).andReturn().getResponse().getStatus()).isEqualTo(400);
+        assertThat(mvc.perform(multipart("/v1/loads/file/sequential")).andReturn().getResponse().getStatus()).isEqualTo(400);
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void admissionLimitRejectsConcurrentWorkAndReleasesPermitAfterFailure() throws Exception {
+        var sequential = mock(SequentialLoadFileProcessor.class);
+        var parallel = mock(ParallelLoadFileProcessor.class);
+        var controller = new LoadFileController(sequential, parallel, 1, java.time.Duration.ofMinutes(1));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        when(sequential.process(any(), any(), anyBoolean())).thenAnswer(call -> {
+            entered.countDown();
+            if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Worker not released");
+            throw new IllegalStateException("test failure");
+        }).thenReturn(new com.example.moneyload.adapter.inbound.file.LoadFileProcessor.Counts(0, 0, 0, 0));
+        try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var first = executor.submit(() -> {
+                assertThatThrownBy(() -> controller.sequential(file(""), false, false,
+                        new org.springframework.mock.web.MockHttpServletResponse())).hasMessage("test failure");
+            });
+            try {
+                assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                assertThatThrownBy(() -> controller.parallel(file(""), false, false,
+                        new org.springframework.mock.web.MockHttpServletResponse()))
+                        .isInstanceOf(TransientDataAccessResourceException.class);
+                verifyNoInteractions(parallel);
+            } finally {
+                release.countDown();
+            }
+            first.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        controller.sequential(file(""), false, false, new org.springframework.mock.web.MockHttpServletResponse());
+    }
+
+    @Test
+    void expiredDeadlineStopsBeforeServiceCall() {
+        var json = new RestJsonConfiguration().restJsonMapper();
+        var controller = new LoadFileController(new SequentialLoadFileProcessor(service, json),
+                new ParallelLoadFileProcessor(service, json), 1, java.time.Duration.ofNanos(1));
+        assertThatThrownBy(() -> controller.sequential(file(line("1")), false, false,
+                new org.springframework.mock.web.MockHttpServletResponse()))
+                .isInstanceOf(TransientDataAccessResourceException.class);
         verifyNoInteractions(service);
     }
 

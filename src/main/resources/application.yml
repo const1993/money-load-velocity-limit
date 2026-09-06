@@ -4,7 +4,7 @@ spring:
   application:
     name: money-load-velocity-limit
   datasource:
-    url: jdbc:h2:mem:moneyload;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    url: ${MONEYLOAD_DB_URL:jdbc:h2:file:./data/moneyload;AUTO_SERVER=TRUE}
     username: sa
     password: ""
   flyway:
@@ -21,3 +21,10 @@ management:
     web:
       exposure:
         include: health
+
+processing:
+  file:
+    workers: 4
+    window-size: 256
+    max-concurrent-uploads: 2
+    timeout: 5m

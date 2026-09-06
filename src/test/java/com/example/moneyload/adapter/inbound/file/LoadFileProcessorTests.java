@@ -21,7 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 
 class LoadFileProcessorTests {
     private final LoadFundsService service = mock(LoadFundsService.class);
-    private final LoadFileProcessor processor = new LoadFileProcessor(service, new RestJsonConfiguration().restJsonMapper());
+    private final LoadFileProcessor processor = new SequentialLoadFileProcessor(service, new RestJsonConfiguration().restJsonMapper());
     private final StringWriter output = new StringWriter();
 
     @Test
