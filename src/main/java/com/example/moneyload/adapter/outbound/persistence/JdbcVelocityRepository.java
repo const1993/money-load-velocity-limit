@@ -84,7 +84,7 @@ public class JdbcVelocityRepository implements VelocityRepository {
                 SELECT accepted_amount_cents, accepted_count, updated_at
                 FROM daily_velocity WHERE customer_id = :customer AND date_utc = :date
                 """).param("customer", customerId).param("date", dateUtc)
-                .query((rs, rowNum) -> new DailyBucket(rs.getLong("accepted_amount_cents"),
+                .query((rs, _) -> new DailyBucket(rs.getLong("accepted_amount_cents"),
                         rs.getInt("accepted_count"), rs.getObject("updated_at", OffsetDateTime.class).toInstant()))
                 .optional();
     }
@@ -95,7 +95,7 @@ public class JdbcVelocityRepository implements VelocityRepository {
                 SELECT accepted_amount_cents, updated_at
                 FROM weekly_velocity WHERE customer_id = :customer AND week_start_utc = :date
                 """).param("customer", customerId).param("date", weekStartUtc)
-                .query((rs, rowNum) -> new WeeklyBucket(rs.getLong("accepted_amount_cents"),
+                .query((rs, _) -> new WeeklyBucket(rs.getLong("accepted_amount_cents"),
                         rs.getObject("updated_at", OffsetDateTime.class).toInstant()))
                 .optional();
     }

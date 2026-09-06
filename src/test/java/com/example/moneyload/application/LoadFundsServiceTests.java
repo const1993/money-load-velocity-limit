@@ -73,7 +73,7 @@ class LoadFundsServiceTests {
 
         var order = inOrder(manager, loads, status, velocity);
         order.verify(manager).getTransaction(argThat(def ->
-                def.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW
+                def != null && def.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW
                         && def.getIsolationLevel() == TransactionDefinition.ISOLATION_READ_COMMITTED));
         order.verify(loads).findResult("customer", "load");
         order.verify(status).createSavepoint();

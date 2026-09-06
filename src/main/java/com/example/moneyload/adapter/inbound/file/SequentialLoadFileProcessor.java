@@ -20,7 +20,8 @@ public class SequentialLoadFileProcessor implements LoadFileProcessor {
 
     @Override
     public Counts process(BufferedReader input, BufferedWriter output, boolean includeDuplicates) throws IOException {
-        long processed = 0, accepted = 0, declined = 0, duplicates = 0;
+        long processed = 0;
+        var counts = new Counts(0, 0, 0, 0);
         String line;
         while ((line = input.readLine()) != null) {
             var attempt = codec.read(line, processed + 1);
@@ -30,22 +31,11 @@ public class SequentialLoadFileProcessor implements LoadFileProcessor {
             } catch (RuntimeException failure) {
                 throw new FileLoadProcessingException(processed + 1, failure);
             }
-            if (outcome instanceof LoadOutcome.Completed completed) {
-                codec.write(output, completed.result());
-                if (completed.accepted()) {
-                    accepted++;
-                } else {
-                    declined++;
-                }
-            } else if (outcome instanceof LoadOutcome.Duplicate duplicate) {
-                duplicates++;
-                if (includeDuplicates) {
-                    codec.write(output, duplicate.originalResult());
-                }
-            }
+            codec.writeOutcome(output, outcome, includeDuplicates);
+            counts = counts.including(outcome);
             processed++;
         }
         output.flush();
-        return new Counts(processed, accepted, declined, duplicates);
+        return counts;
     }
 }

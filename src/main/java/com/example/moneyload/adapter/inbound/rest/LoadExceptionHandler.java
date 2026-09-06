@@ -4,6 +4,8 @@ import com.example.moneyload.application.error.TechnicalFailureClassifier;
 import com.example.moneyload.adapter.inbound.file.InvalidFileInputException;
 import com.example.moneyload.adapter.inbound.file.FileLoadProcessingException;
 import java.util.Arrays;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -25,7 +27,7 @@ public class LoadExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @ExceptionHandler(InvalidLoadRequestException.class)
-    ResponseEntity<Object> invalid(InvalidLoadRequestException failure, WebRequest request) {
+    ResponseEntity<Object> invalid(WebRequest request) {
         return response(HttpStatus.BAD_REQUEST, new HttpHeaders(), request);
     }
 
@@ -55,8 +57,8 @@ public class LoadExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @Override
-    protected ResponseEntity<Object> handleExceptionInternal(Exception failure, Object body, HttpHeaders headers,
-                                                             HttpStatusCode status, WebRequest request) {
+    protected ResponseEntity<Object> handleExceptionInternal(@NonNull Exception failure, @Nullable Object body, @NonNull HttpHeaders headers,
+                                                             @NonNull HttpStatusCode status, @NonNull WebRequest request) {
         if (status.is5xxServerError()) {
             logFailure("INTERNAL_ERROR", failure);
         }
@@ -79,12 +81,12 @@ public class LoadExceptionHandler extends ResponseEntityExceptionHandler {
         var event = log.atError().addKeyValue("event", "load_request_failed")
                 .addKeyValue("failure_category", category).addKeyValue("exception_type", failure.getClass().getName());
         if (failure instanceof FileLoadProcessingException fileFailure) {
-            event.addKeyValue("line_number", fileFailure.lineNumber());
+            event = event.addKeyValue("line_number", fileFailure.lineNumber());
         }
         // Stack locations and cause types aid diagnosis without logging SQL/payload-bearing messages.
         Throwable cause = failure;
         for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
-            event.addKeyValue("cause_" + depth + "_type", cause.getClass().getName())
+            event = event.addKeyValue("cause_" + depth + "_type", cause.getClass().getName())
                     .addKeyValue("cause_" + depth + "_frames", Arrays.stream(cause.getStackTrace()).limit(16).toList());
         }
         event.log("Load request failed");

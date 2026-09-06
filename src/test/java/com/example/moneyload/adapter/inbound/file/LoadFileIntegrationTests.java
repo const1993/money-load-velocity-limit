@@ -3,6 +3,7 @@ package com.example.moneyload.adapter.inbound.file;
 import com.example.moneyload.MoneyLoadApplication;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.SpringApplication;
@@ -15,7 +16,8 @@ class LoadFileIntegrationTests {
     void processorProcessesFixtureThroughRealServiceAndH2() throws Exception {
         Path input = directory.resolve("input.txt");
         Path output = directory.resolve("output.txt");
-        try (var fixture = getClass().getResourceAsStream("/file/input.txt")) {
+        try (var fixture = Objects.requireNonNull(getClass().getResourceAsStream("/file/input.txt"),
+                "Missing test fixture: /file/input.txt")) {
             Files.copy(fixture, input);
         }
         try (var context = SpringApplication.run(MoneyLoadApplication.class,
@@ -25,7 +27,8 @@ class LoadFileIntegrationTests {
             try (var reader = Files.newBufferedReader(input); var writer = Files.newBufferedWriter(output)) {
                 context.getBean(SequentialLoadFileProcessor.class).process(reader, writer);
             }
-            try (var fixture = getClass().getResourceAsStream("/file/expected.txt")) {
+            try (var fixture = Objects.requireNonNull(getClass().getResourceAsStream("/file/expected.txt"),
+                "Missing test fixture: /file/expected.txt")) {
                 assertThat(Files.readString(output)).isEqualTo(new String(fixture.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
             }
         }

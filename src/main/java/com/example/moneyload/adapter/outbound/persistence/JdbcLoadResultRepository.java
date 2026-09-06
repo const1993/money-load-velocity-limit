@@ -41,7 +41,7 @@ public class JdbcLoadResultRepository implements LoadResultRepository {
                 FROM load_attempt WHERE customer_id = :customer AND load_id = :load
                 """)
                 .param("customer", customerId).param("load", loadId)
-                .query((rs, rowNum) -> {
+                .query((rs, _) -> {
                     var decision = new LoadDecision(DecisionReason.valueOf(rs.getString("decision_reason")));
                     if (decision.accepted() != rs.getBoolean("accepted")) {
                         throw new IllegalStateException("Stored accepted flag disagrees with decision reason");

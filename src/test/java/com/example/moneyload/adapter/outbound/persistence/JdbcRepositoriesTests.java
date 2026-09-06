@@ -156,7 +156,8 @@ class JdbcRepositoriesTests {
         assertThat(velocity.tryIncrementWeekly("customer", WEEK, new Money(Long.MAX_VALUE), maximum, UPDATED)).isTrue();
         assertThat(velocity.tryIncrementDaily("customer", DAY, new Money(1), maximum, CREATED)).isFalse();
         assertThat(velocity.tryIncrementWeekly("customer", WEEK, new Money(1), maximum, CREATED)).isFalse();
-        jdbc.sql("UPDATE daily_velocity SET accepted_count = :count").param("count", Integer.MAX_VALUE).update();
+        jdbc.sql("UPDATE daily_velocity SET accepted_count = :count WHERE customer_id = :customer AND date_utc = :day")
+                .param("count", Integer.MAX_VALUE).param("customer", "customer").param("day", DAY).update();
         assertThat(velocity.tryIncrementDaily("customer", DAY, new Money(0), maximum, CREATED)).isFalse();
         assertThat(velocity.findDailyBucket("customer", DAY))
                 .contains(new DailyBucket(Long.MAX_VALUE, Integer.MAX_VALUE, UPDATED));

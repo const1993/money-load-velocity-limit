@@ -182,7 +182,7 @@ class LoadFundsServiceIntegrationTests {
     @Test
     void failedCallRollsBackAndExplicitResubmissionUsesFreshTransaction() {
         var repository = spy(loads);
-        var resources = new ArrayList<Object>();
+        var resources = new ArrayList<>();
         doAnswer(invocation -> {
             resources.add(TransactionSynchronizationManager.getResource(database));
             // At the start of either attempt, the failed insert and increments must be absent.
@@ -223,7 +223,7 @@ class LoadFundsServiceIntegrationTests {
             private boolean firstCommit = true;
 
             @Override
-            protected void doCommit(DefaultTransactionStatus status) {
+            protected void doCommit(@org.jspecify.annotations.NonNull DefaultTransactionStatus status) {
                 super.doCommit(status);
                 if (firstCommit) {
                     firstCommit = false;

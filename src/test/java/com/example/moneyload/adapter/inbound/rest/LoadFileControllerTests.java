@@ -141,7 +141,7 @@ class LoadFileControllerTests {
         var controller = new LoadFileController(sequential, parallel, 1, java.time.Duration.ofMinutes(1));
         var entered = new java.util.concurrent.CountDownLatch(1);
         var release = new java.util.concurrent.CountDownLatch(1);
-        when(sequential.process(any(), any(), anyBoolean())).thenAnswer(call -> {
+        when(sequential.process(any(), any(), anyBoolean())).thenAnswer(_ -> {
             entered.countDown();
             if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Worker not released");
             throw new IllegalStateException("test failure");

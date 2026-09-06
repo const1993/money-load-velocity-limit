@@ -131,12 +131,12 @@ class LoadControllerTests {
     void generatedIdsAreUniqueAndInvalidIncomingIdsAreReplaced() throws Exception {
         when(service.process(any())).thenReturn(new LoadOutcome.Completed(stored(DecisionReason.ACCEPTED)));
         String first = request(BODY).getHeader("X-Request-Id");
-        assertThat(UUID.fromString(first)).isNotNull();
+        assertThat(UUID.fromString(java.util.Objects.requireNonNull(first, "Missing request ID"))).isNotNull();
         assertThat(request(BODY).getHeader("X-Request-Id")).isNotEqualTo(first);
         for (String invalid : new String[]{"", "has spaces", "x".repeat(129), "bad\nheader"}) {
             var response = mvc.perform(post("/v1/loads").contentType("application/json")
                     .header("X-Request-Id", invalid).content(BODY)).andReturn().getResponse();
-            assertThat(UUID.fromString(response.getHeader("X-Request-Id"))).isNotNull();
+            assertThat(UUID.fromString(java.util.Objects.requireNonNull(response.getHeader("X-Request-Id"), "Missing request ID"))).isNotNull();
         }
     }
 

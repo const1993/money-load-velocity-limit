@@ -102,8 +102,8 @@ public class LoadFileController {
         } catch (Exception failure) {
             var event = log.atInfo().addKeyValue("event", "file_processing_failed").addKeyValue("mode", mode)
                     .addKeyValue("duration_ms", (System.nanoTime() - started) / 1_000_000);
-            if (failure instanceof InvalidFileInputException invalid) event.addKeyValue("line_number", invalid.lineNumber());
-            if (failure instanceof FileLoadProcessingException technical) event.addKeyValue("line_number", technical.lineNumber());
+            if (failure instanceof InvalidFileInputException invalid) event = event.addKeyValue("line_number", invalid.lineNumber());
+            if (failure instanceof FileLoadProcessingException technical) event = event.addKeyValue("line_number", technical.lineNumber());
             event.log("File processing stopped");
             throw failure;
         } finally {

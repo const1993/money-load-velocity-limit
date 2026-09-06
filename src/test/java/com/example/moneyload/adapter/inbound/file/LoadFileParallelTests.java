@@ -80,7 +80,7 @@ class LoadFileParallelTests {
     }
 
     @Test
-    void failureStopsItsLaneAndPreventsReadingNextWindow() throws Exception {
+    void failureStopsItsLaneAndPreventsReadingNextWindow() {
         var service = mock(LoadFundsService.class);
         var processor = new ParallelLoadFileProcessor(service, new RestJsonConfiguration().restJsonMapper(), 2, 2);
         var read = new AtomicInteger();

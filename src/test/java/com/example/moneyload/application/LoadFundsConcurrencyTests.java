@@ -91,7 +91,7 @@ class LoadFundsConcurrencyTests {
 
     @RepeatedTest(5)
     void dailyAmountBoundary() throws Exception {
-        seed("a", 400_000, 1, 400_000);
+        seed(400_000, 1, 400_000);
         var results = race(List.of(load("a", "one", 100_000), load("a", "two", 100_000)));
         assertReasons(results, 1, DecisionReason.DAILY_AMOUNT_LIMIT_EXCEEDED);
         assertBuckets("a", 500_000, 2, 500_000);
@@ -100,7 +100,7 @@ class LoadFundsConcurrencyTests {
 
     @RepeatedTest(5)
     void dailyCountBoundary() throws Exception {
-        seed("a", 200, 2, 200);
+        seed(200, 2, 200);
         var results = race(List.of(load("a", "one", 100), load("a", "two", 100)));
         assertReasons(results, 1, DecisionReason.DAILY_COUNT_LIMIT_EXCEEDED);
         assertBuckets("a", 300, 3, 300);
@@ -109,7 +109,7 @@ class LoadFundsConcurrencyTests {
 
     @RepeatedTest(5)
     void weeklyBoundaryRestoresDeclinedDailyIncrement() throws Exception {
-        seed("a", 0, 0, 1_900_000);
+        seed(0, 0, 1_900_000);
         var results = race(List.of(load("a", "one", 100_000), load("a", "two", 100_000)));
         assertReasons(results, 1, DecisionReason.WEEKLY_AMOUNT_LIMIT_EXCEEDED);
         assertBuckets("a", 100_000, 1, 2_000_000);
@@ -157,6 +157,8 @@ class LoadFundsConcurrencyTests {
         assertThat(jdbc.sql("SELECT COUNT(*) FROM weekly_velocity").query(Long.class).single()).isEqualTo(1);
     }
 
+    // Explicit shutdown retains the bounded termination check on failed races.
+    @SuppressWarnings("resource")
     private List<LoadOutcome> race(List<LoadAttempt> requests) throws Exception {
         var barrier = new CyclicBarrier(requests.size());
         var executor = Executors.newFixedThreadPool(requests.size());
@@ -189,7 +191,8 @@ class LoadFundsConcurrencyTests {
         }
     }
 
-    private void seed(String customer, long amount, int count, long weekly) {
+    private void seed(long amount, int count, long weekly) {
+        String customer = "a";
         // Setup uses autocommit connections: no test transaction is hidden from workers.
         jdbc.sql("INSERT INTO daily_velocity VALUES (?, ?, ?, ?, ?)")
                 .param(customer).param(DAY).param(amount).param(count).param(EVENT.atOffset(ZoneOffset.UTC)).update();

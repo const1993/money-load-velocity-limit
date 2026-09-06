@@ -48,7 +48,8 @@ public class ParallelLoadFileProcessor implements LoadFileProcessor {
     }
 
     public Counts process(BufferedReader input, BufferedWriter output, boolean includeDuplicates) throws IOException {
-        long processed = 0, accepted = 0, declined = 0, duplicates = 0;
+        long processed = 0;
+        var counts = new Counts(0, 0, 0, 0);
         var loggingContext = MDC.getCopyOfContextMap();
         // A bounded window limits parsed input and out-of-order results, even if the first row is slow.
         try (var executor = Executors.newFixedThreadPool(workers)) {
@@ -121,19 +122,8 @@ public class ParallelLoadFileProcessor implements LoadFileProcessor {
                     throw failure.get();
                 }
                 for (var outcome : outcomes) {
-                    if (outcome instanceof LoadOutcome.Completed completed) {
-                        codec.write(output, completed.result());
-                        if (completed.accepted()) {
-                            accepted++;
-                        } else {
-                            declined++;
-                        }
-                    } else if (outcome instanceof LoadOutcome.Duplicate duplicate) {
-                        duplicates++;
-                        if (includeDuplicates) {
-                            codec.write(output, duplicate.originalResult());
-                        }
-                    }
+                    codec.writeOutcome(output, outcome, includeDuplicates);
+                    counts = counts.including(outcome);
                     processed++;
                 }
                 if (invalid != null) {
@@ -142,7 +132,7 @@ public class ParallelLoadFileProcessor implements LoadFileProcessor {
             }
         }
         output.flush();
-        return new Counts(processed, accepted, declined, duplicates);
+        return counts;
     }
 
 }

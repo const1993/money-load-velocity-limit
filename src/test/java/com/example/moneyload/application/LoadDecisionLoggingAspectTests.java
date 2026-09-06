@@ -33,6 +33,8 @@ import static org.mockito.Mockito.*;
 class LoadDecisionLoggingAspectTests {
     private static final Instant NOW = Instant.parse("2026-09-05T12:00:00Z");
     private static final LoadAttempt ATTEMPT = new LoadAttempt("load", "customer", new Money(100), NOW);
+    // Capture the production logger to assert its events.
+    @SuppressWarnings("LoggerInitializedWithForeignClass")
     private final Logger logger = (Logger) LoggerFactory.getLogger(LoadDecisionLoggingAspect.class);
     private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
     private Level previousLevel;
@@ -83,7 +85,7 @@ class LoadDecisionLoggingAspectTests {
             when(loads.findResult("customer", "load")).thenReturn(Optional.of(
                     new StoredLoadResult(ATTEMPT, new LoadDecision(reason), NOW)));
         }
-        doAnswer(invocation -> {
+        doAnswer(_ -> {
             assertThat(appender.list).isEmpty();
             return null;
         }).when(manager).commit(status);
