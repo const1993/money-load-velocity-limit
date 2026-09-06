@@ -1,5 +1,7 @@
 # Money-load velocity-limit service
 
+The application processes loads through REST or sequential JSON-lines file uploads.
+
 Spring Boot bootstrap using Java 25. Install a JDK 25 and set `JAVA_HOME` to it.
 The Gradle Wrapper downloads Gradle; no global Gradle installation is required.
 
@@ -30,8 +32,7 @@ com.example.moneyload
 │   └── port
 ├── adapter
 │   ├── inbound
-│   │   ├── rest
-│   │   └── file
+│   │   └── rest
 │   └── outbound
 │       └── persistence
 ├── configuration
@@ -127,7 +128,7 @@ as UTC `OffsetDateTime` and maps them back to `Instant`, preserving nanoseconds 
 H2. Repositories create no transaction boundaries and participate in caller-owned
 transactions. H2 tests cover persisted decisions, duplicate keys, bucket creation,
 exact limits, rejected updates, overflow, key isolation, technical failures, and
-low-level rollback participation. Service tests are described below; no concurrent tests exist.
+low-level rollback participation. Service and concurrency tests are described below.
 
 Migration `V1__create_velocity_schema.sql` uses a CASE expression for the
 allowed-reason check. Repository tests using
@@ -178,7 +179,7 @@ final result INSERT instead discovers a duplicate, the entire attempt rolls back
 Only then does a separate lookup transaction retrieve the committed original and
 return Duplicate. This is uniqueness resolution, not a second evaluation or retry
 loop. If no original can be retrieved, the failure propagates. Processing timestamps
-and decisions are logged at DEBUG with named fields only after transaction completion.
+and decisions are logged at INFO with named fields only after transaction completion.
 `LoadDecisionLoggingAspect` handles this with `@AfterReturning` on
 `LoadFundsService.process`; technical failures produce no decision log. Spring AOP
 is enabled by Boot with the AspectJ dependency. The service contains no logging code.
@@ -193,62 +194,140 @@ amount/count/timestamps on declines, removal of newly created buckets, exact lim
 duplicate isolation, full technical rollback, and final-insert uniqueness handling.
 No threads, REST/file adapters, or external database are added.
 
-## Retry and technical errors (Chunk 6)
+## Technical failures
 
-`RetryingLoadFundsService.process(LoadAttempt)` is the entry point for processing
-one operation with retries. `LoadFundsService` remains the single-attempt service.
-The coordinator passes the same immutable load on every invocation, preserving
-`(customer_id, load_id)`. Business results return immediately; technical failures
-never become `accepted=false`.
+Each request invokes `LoadFundsService` once. There are no automatic retries,
+backoff delays, or retry configuration. A transient failure returns HTTP 503
+immediately; unexpected internal failures return 500. Neither becomes a business
+decline. The classifier recognizes explicit Spring/JDBC transient categories.
 
-Each invocation crosses the existing `LoadFundsTransaction` Spring proxy using
-REQUIRES_NEW. Commit or rollback and transaction cleanup finish before the
-coordinator sees the result or exception. An existing caller transaction is
-suspended for each attempt and resumed afterward; backoff never runs inside the
-failed attempt's transaction. No repository statement is retried independently.
+Transactions and idempotency remain unchanged. If commit succeeds but its
+acknowledgement is lost, the request fails. A subsequent request with the same
+customer/load key retrieves the stored decision without applying velocity again.
 
-Immutable `ProcessingRetryProperties` binds `processing.retry`, separately from
-business limits. Defaults are `max-attempts: 3`, `initial-backoff: 100ms`, and
-`max-backoff: 1s`. Startup rejects attempts below one, negative initial backoff,
-and maximum backoff below initial backoff. Zero backoff is explicitly allowed.
-Spring Framework's built-in `RetryTemplate` executes the operation using a
-`RetryPolicy` and `ExponentialBackOff`; there is no application retry loop.
-Spring's retry count is configured as `max-attempts - 1`. Delays double after
-each failure, capped at max-backoff. Durations must be whole milliseconds within
-the range of a Java long, validated at startup to prevent silent truncation or
-conversion overflow. There is no delay after the last attempt. The injectable
-`BackoffSleeper` uses `Thread.sleep(Duration)` in production; tests use fakes.
-Interruption restores the interrupt flag and stops processing immediately.
-Since `RetryTemplate` has no sleeper injection point, a backoff adapter performs
-the configured wait and returns zero to the template to avoid sleeping twice.
-The adapter also emits the retry WARN log. Each call owns its own template and
-operation state, while the configured policy is reused without mutation.
+## REST API (Chunk 8)
 
-`TechnicalFailureClassifier` centralizes classification, reusing Spring/JDBC's
-existing technical exception hierarchy rather than wrapping every exception.
-Explicit transient/recoverable data-access failures and transaction timeouts
-are retryable. Recognized transaction/connection wrappers are inspected only for
-explicit transient or recoverable causes. SQL grammar, integrity, mapping,
-programming, validation, unknown connection failures, and unknown commit failures
-fail immediately with their original exception. A rollback failure with an
-application exception also fails immediately. Exhaustion throws
-`RetryExhaustedException`, retaining the last failure, attempt count, and category.
-Intermediate retries emit WARN with event, customer_id, load_id, attempt,
-max_attempts, failure_category, and backoff fields, without payloads or stack
-traces. Exhaustion produces no additional ERROR log in this layer.
+`POST /v1/loads` consumes and produces `application/json` and processes exactly
+one load per request. Start normally with `./gradlew bootRun` or the executable
+jar, then submit:
 
-When a retry finds a stored result, the existing transaction returns before
-touching velocity. The coordinator recovers that original decision as Completed,
-including its original payload and processing timestamp. A first-attempt
-duplicate remains Duplicate for future adapters. Recovery assumes the composite
-key identifies the same logical operation throughout a coordinator call; it
-cannot distinguish a pre-existing duplicate whose first lookup failed from an
-uncertain commit by this call. Separate calls still preserve duplicate semantics.
+```sh
+curl -i http://localhost:8080/v1/loads \
+  -H 'Content-Type: application/json' -H 'X-Request-Id: example-123' \
+  --data '{"id":"1","customer_id":"customer","load_amount":"$100.00","time":"2018-01-01T00:00:00Z"}'
+```
 
-Focused tests cover first success, transient recovery, exhaustion, immediate
-failure, all business decisions, duplicates, capped/overflow-safe backoff,
-interruption, classification, and startup validation. H2 tests additionally
-prove full rollback and fresh transactions under an outer transaction, and
-simulate a lost acknowledgement after actual commit for accepted and declined
-results, verifying counters are applied at most once. No retry library or other
-dependency is added. Implementation stops after Chunk 6.
+Acceptance and velocity decline both return HTTP 200 with exactly `id`,
+`customer_id`, and boolean `accepted`. REST idempotent replay returns the original
+committed decision, even if the new valid payload has a different amount/time.
+The controller invokes `LoadFundsService`; no controller business logic,
+transactions, repository calls, or additional retries exist.
+
+`LoadRequest` and `LoadResponse` are separate from the domain.
+Mapping reuses `Money.parse`, domain ID validation, and offset-aware timestamp
+parsing. Invalid/missing fields, malformed JSON, timezone-less timestamps,
+fractional cents, scalar-to-string coercion, extra fields, duplicate JSON keys,
+arrays, and trailing JSON objects fail validation. Mapping errors alone become client errors; the same
+exception type raised by service internals remains a server error.
+
+Central advice returns a stable `ApiError` with `code`, `message`, and `request_id`:
+
+| Outcome | HTTP | Code |
+| --- | --- | --- |
+| Invalid JSON or load data | 400 | INVALID_REQUEST |
+| Transient technical failure | 503 | SERVICE_UNAVAILABLE |
+| Unexpected internal failure | 500 | INTERNAL_ERROR |
+
+Framework errors retain their HTTP status (for example 405/415) with the same
+error shape. Responses never expose SQL, exception names, internal decline reasons,
+counters, limits, or stack traces. Technical failures are logged once at ERROR
+by `LoadExceptionHandler`, which centrally logs technical failures and maps
+exceptions to HTTP responses, including malformed JSON before controller invocation.
+No controller error-logging aspect or deduplication marker is needed. Logs exclude
+raw exception messages and request bodies. Request ID is inherited from MDC.
+The shared decision aspect emits one INFO log per completed service outcome.
+
+The correlation filter accepts one `X-Request-Id` header containing 1–128 ASCII
+letters/digits or `.`, `_`, `:`, `-`, beginning with a letter/digit. Absent, invalid,
+or multiple values are replaced by a generated UUID. The ID is returned in the
+response header, included in error bodies, and scoped to MDC `request_id` during
+processing. The previous MDC value is restored in `finally`, or removed when
+none existed. The endpoint is synchronous; no asynchronous processing is added.
+
+MVC tests use a mocked application service; one HTTP integration test exercises
+the real service and H2 and verifies replay increments counters only once.
+`/actuator/health` exposure is unchanged.
+No authentication, OpenAPI, PostgreSQL, Testcontainers, retention, concurrency
+hardening, business metrics, or checkpoint infrastructure is added. Implementation
+stops after Chunk 8.
+
+## H2 concurrency verification
+
+`LoadFundsConcurrencyTests` runs 30 isolated race scenarios across daily amount,
+daily count, weekly amount/savepoint rollback, duplicate keys, independent
+customers, and initial bucket creation. Winners are not predetermined; returned
+decisions are checked against committed load results and daily/weekly counters.
+
+Tests use real JDBC repositories and Spring `REQUIRES_NEW` transactions. A
+test-only aspect waits at a barrier inside each transaction before business SQL;
+distinct H2 session IDs verify separate simultaneous database connections.
+Each repetition has a fresh database and committed setup. The test-only Hikari
+pool allows 12 connections, with 5-second connection and H2 lock timeouts.
+Barriers, future waits, executor shutdown, and overall tests have bounded waits.
+Production connection settings and processing code are unchanged.
+
+These tests validate application invariants on H2, not performance or identical
+PostgreSQL locking/isolation behavior. PostgreSQL-specific concurrency verification
+remains future production hardening. No retries, explicit pessimistic locks,
+application-local locks, or production thread pools are introduced.
+
+## Minimal file adapter
+
+File processing is triggered only by the upload endpoints below. Application startup
+does not read or write load files.
+
+Input is UTF-8, one complete JSON object per line (no array). The adapter uses
+buffered sequential I/O, `Money.parse`, and the same offset-aware timestamp parsing
+as REST. Each completed load emits exactly `id`, `customer_id`, and `accepted`,
+as compact JSON followed by a newline. Duplicates emit nothing, including duplicates
+already stored by an earlier invocation. REST continues replaying their original decisions.
+
+Invalid input (including blank lines) stops at the reported line number. Technical
+failures also stop processing and never become declines. Earlier loads remain
+committed and output may be partial; there are no retries, checkpoints, or restart
+recovery. No raw input lines or per-load decision logs are added by the adapter.
+
+## File upload endpoints
+
+Both endpoints accept a multipart field named `file`. They reuse the sequential file processor and return UTF-8
+`application/x-ndjson` (one compact decision per line, no JSON array).
+
+```sh
+# Download output.txt
+curl --fail-with-body -F 'file=@input.txt' \
+  http://localhost:8080/v1/loads/file/download -o output.txt
+
+# Return JSON lines directly in the response body
+curl --fail-with-body -F 'file=@input.txt' http://localhost:8080/v1/loads/file
+```
+
+The download endpoint adds `Content-Disposition: attachment; filename="output.txt"`.
+By default duplicates emit nothing; uploading the same loads again can return an empty body.
+An empty file succeeds. Missing uploads and invalid lines return HTTP 400 through
+the existing error handler; technical failures return 500/503. Processing stops at
+the failure, but earlier decisions remain committed. Output is buffered on a temporary
+file before sending a success response so failures do not produce a partial HTTP 200.
+The temporary output is deleted on success or failure; no checkpoint or batch metadata
+is retained. Existing Spring multipart size limits apply and can be configured through
+`spring.servlet.multipart.max-file-size` and `spring.servlet.multipart.max-request-size`.
+The original `POST /v1/loads` behavior is unchanged.
+
+Both upload endpoints accept `includeDuplicates` (default `false`). Use
+`?includeDuplicates=true` to emit the original stored decision for every duplicate
+in input order, with the same `id`, `customer_id`, and `accepted` fields. This does
+not reevaluate the load or update its velocity counters. For example:
+
+```sh
+curl --fail-with-body -F 'file=@input.txt' \
+  'http://localhost:8080/v1/loads/file/download?includeDuplicates=true' -o output.txt
+```
